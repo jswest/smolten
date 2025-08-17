@@ -139,27 +139,6 @@ $ smolten tag data.csv output.csv
 - **Node.js**: commander (CLI), pino (logging), csv-parser (CSV handling)
 - **Python**: smolagents, pandas, litellm (model providers)
 
-### File Structure
-```
-smolten/
-│—— agents/
-│   ├── ontology-generator.py
-│   └── tagger.py
-├── lib/
-│   ├── cli.js (main CLI entry)
-│   └── logger.js (pino setup)
-├── logs/
-├── .gitignore
-├── .venv
-├── CLAUDE.md
-├── index.js (the main script, which passes off to `lib/cli.js`)
-├── package.json
-├── package-lock.json
-├── README.md
-├── requirements.txt
-└── TODOS.md
-```
-
 ### CLI Interface
 ```bash
 smolten <input.csv> <output.csv> [options]
