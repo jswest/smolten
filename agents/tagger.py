@@ -53,21 +53,7 @@ if os.getenv("SMOLTEN_DEBUG"):
     litellm._turn_on_debug()
 
 
-def progress(message, progress_type="status", percentage=None, emoji="🌋"):
-    """Send structured progress update to Node.js"""
-    progress_data = {
-        "type": progress_type,
-        "message": message,
-        "emoji": emoji
-    }
-    if percentage is not None:
-        progress_data["percentage"] = percentage
-    
-    print(f"SMOLTEN_PROGRESS:{json.dumps(progress_data)}", file=sys.stderr, flush=True)
-
-def lava(msg):
-    """Simple molten message for compatibility"""
-    print(f"🌋 {msg}", file=sys.stderr, flush=True)
+from shared import format_token_count, progress, lava, load_prompt
 
 def main():
     p = argparse.ArgumentParser(description="General CSV row tagger with editorial judgment (smolagents, 1 pass)")
@@ -114,14 +100,8 @@ def main():
         description="Run short Python snippets."
     )
 
-    MIN_SYSTEM = (
-        "You are smolten, an editorial CSV tagger. You may read files and run pandas via the python tool. "
-        "Protocol you MUST follow on EVERY step:\n"
-        "1) Start with a line beginning with 'Thoughts:' describing what you’ll do next.\n"
-        "2) Immediately follow with a single Python block wrapped EXACTLY in <code> and </code> tags.\n"
-        "3) Do not emit any code outside those tags.\n"
-        "When you produce the FINAL JSON summary, DO IT IN CODE by calling final_answer(<the JSON object>), inside <code> ... </code>."
-    )
+    # Load system prompt
+    MIN_SYSTEM = load_prompt("tagging_system.md")
 
     agent = CodeAgent(
         tools=[py, FinalAnswerTool()],
@@ -141,56 +121,23 @@ def main():
         ],
     )
 
-    TASK = f"""
-Use Python to perform ALL steps deterministically while leveraging your editorial judgment.
-
-You are given an ontology payload as JSON. At the VERY TOP of your first <code> block,
-you MUST create a Python dict variable named ONT EXACTLY as follows (paste verbatim):
-
-ONT = {ontology_string}
-    
-1) Use ONT (a dict with tag_name->description) as the authoritative tag list. It is required to adhere to this ontology.
-
-2) Load CSV from {args.csv_path!r} as df (pandas). Create df_all = df.copy().
-   - For exploration ONLY, if len(df) > {args.sample_size}, sample {args.sample_size} rows (random_state=42) into df_s.
-   - Identify text-like columns (object/string), numeric columns, parseable dates (try pandas.to_datetime with errors='coerce').
-
-4) Implement the ontology as executable code:
-   - Author a function `def label_row(row) -> list[str]:` that returns applicable tag names for a row.
-   - Use both simple heuristics (regex/thresholds) **and** your editorial cues encoded as:
-        * lightweight keyword/phrase sets per tag (you choose),
-        * soft signals (e.g., “if title looks rhetorical”, “if summary looks listicle-like”),
-        * fallbacks (if supporting columns absent, the tag simply doesn’t apply).
-   - Keep dependencies minimal: only pandas/re/json/re/stdlib allowed.
-   - Normalize emitted names to lowercase dashed form when building the final string.
-
-5) Apply to ALL rows (df_all):
-   - Vectorize if easy; otherwise a fast `.apply` is acceptable.
-   - Create column 'smolten_tag':
-        * join tags with commas;
-        * if none, set an empty string.
-
-6) Save df_all to {args.output_path!r} with index=False.
-
-7) Return ONLY this JSON summary (no prints/markdown), WRAPPED IN <code> ... </code>:
-<code>
-{{
-  "rows_tagged": <int>,
-  "unique_tags": <int>,
-  "example_tags": [ "<tag1>", "<tag2>", "<tag3>" ],
-  "top_tags": [ [ "<tag>", <count> ], ... ]
-}}
-</code>
-
-Implementation tips:
-- Heuristic + editorial blend: You decide the keywords/regex and thresholds after reading df_s.
-- Treat non-existent columns gracefully (tag simply never fires).
-- For long text columns, prefer simple phrase lists over heavy NLP.
-- Keep label_row concise and readable.
-"""
+    # Load task prompt and format with parameters
+    task_template = load_prompt("tagging_task.md")
+    TASK = task_template.format(
+        ontology_string=ontology_string,
+        csv_path=args.csv_path,
+        sample_size=args.sample_size,
+        output_path=args.output_path
+    )
 
     progress("starting editorial tagging", "status")
-    summary = agent.run(TASK, max_steps=args.max_steps)
+    
+    try:
+        run_result = agent.run(TASK, max_steps=args.max_steps)
+    except Exception as e:
+        print(f"❌ Error during tagging: {e}", file=sys.stderr)
+        sys.exit(1)
+    
     progress("tagging complete", "complete", emoji="💎")
     # Summary is handled by Node.js side
     pass

@@ -19,6 +19,7 @@ from smolagents import (
   Tool
 )
 
+
 # Suppress litellm logging
 litellm.suppress_debug_info = True
 litellm.set_verbose = False
@@ -47,13 +48,7 @@ PROVIDER_CONFIG = {
     }
 }
 
-MIN_SYSTEM = (
-    "You are smolten, a compact CSV-tagging assistant.\n"
-    "Use Python only when needed via the provided python tool.\n"
-    "Return a single strict JSON object exactly matching the user schema.\n"
-    "No prose, no markdown fences, no Thought/Code/Observation logs.\n"
-    "Use snake_case for keys."
-)
+# MIN_SYSTEM will be loaded in main()
 
 
 class FinalOntologyTool(Tool):
@@ -76,21 +71,8 @@ class FinalOntologyTool(Tool):
         return json.dumps({"tags": tags, "notes": notes})
 
 
-def progress(message, progress_type="status", percentage=None, emoji="🌋"):
-    """Send structured progress update to Node.js"""
-    progress_data = {
-        "type": progress_type,
-        "message": message,
-        "emoji": emoji
-    }
-    if percentage is not None:
-        progress_data["percentage"] = percentage
-    
-    print(f"SMOLTEN_PROGRESS:{json.dumps(progress_data)}", file=sys.stderr, flush=True)
+from shared import format_token_count, progress, lava, load_prompt
 
-def lava(msg):
-    """Simple molten message for compatibility"""
-    print(f"🌋 {msg}", file=sys.stderr, flush=True)
 
 def main():
     p = argparse.ArgumentParser(description="Generate a tag ontology from a CSV using smolagents")
@@ -130,6 +112,10 @@ def main():
         sys.exit(1)
     
     progress("warming the lava pool", "status")
+    
+    # Load system prompt
+    MIN_SYSTEM = load_prompt("ontology_system.md")
+    
     llm_kwargs = {
         "model_id": model_name,
         "api_base": config["api_base"],
@@ -146,6 +132,26 @@ def main():
         description="Run short Python snippets."
     )
 
+    def on_step(_, agent=None):
+        monitor = getattr(agent, "monitor", None)
+        if not monitor:
+            return
+
+        if hasattr(monitor, "to_dict"):
+            usage = monitor.to_dict()
+        else:
+            usage = {
+                "input_tokens": getattr(monitor, "input_tokens", 0),
+                "output_tokens": getattr(monitor, "output_tokens", 0),
+                "cost": getattr(monitor, "cost", 0),
+                "num_calls": getattr(monitor, "num_calls", 0),
+            }
+        progress_string = (
+            f"In: {format_token_count(usage['input_tokens'])}; "
+            f"Out: {format_token_count(usage['output_tokens'])}."
+        )
+        progress(progress_string)
+
     final_tool = FinalOntologyTool()
     agent = CodeAgent(
         tools=[py, final_tool],
@@ -153,39 +159,25 @@ def main():
         instructions=MIN_SYSTEM,
         add_base_tools=False,
         max_steps=4,
-        verbosity_level=0
+        verbosity_level=0,
+        step_callbacks=[on_step]
     )
 
-    # Single instruction: the agent should *do* the python work and return strict JSON.
+    # Load task prompt and format with parameters
     cols_hint = [c.strip() for c in args.columns.split(",")] if args.columns else []
-    user_task = f"""
-You are a data tagging assistant. Use Python code when helpful.
-
-Task:
-1) Load the CSV at path: {args.csv_path!r} with pandas.
-2) If there are more than {args.sample_size} rows, randomly sample {args.sample_size} with a fixed random_state=42.
-3) Prefer columns (if present): {cols_hint}
-4) Define a set of reusable ROW-LEVEL tags (i.e., labels applied to individual records based on their values)!
-5) Return ONLY a strict JSON object matching this shape (no markdown fences, no extra text):
-
-{{
-  "ontology": {{
-    "tag_name": "description": "what the tag means",
-  }},
-  "notes": "optional brief notes or assumptions"
-}}
-
-Constraints:
-- Tag names must be lowercased, contain no commas, and be dashed rather spaced out.
-- Keep total response under 20k characters.
-- Do not print code output; only return the final JSON object.
-
-{args.additional_prompt}
-"""
+    task_template = load_prompt("ontology_task.md")
+    user_task = task_template.format(
+        csv_path=args.csv_path,
+        sample_size=args.sample_size,
+        columns_hint=cols_hint,
+        additional_prompt=args.additional_prompt
+    )
 
     progress("analyzing your CSV data", "progress")
+    
     try:
-        result = agent.run(user_task)
+        run_result = agent.run(user_task)
+        result = run_result
     except Exception as e:
         print(f"\n🥵 smolten hissed: {e}", file=sys.stderr); sys.exit(1)
     progress("ontology generation complete", "complete", emoji="💎")
