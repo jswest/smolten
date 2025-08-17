@@ -12,80 +12,53 @@ from pathlib import Path
 from typing import List, Dict, Any
 
 import pandas as pd
-from smolagents import CodeAgent, InferenceClientModel
+from smolagents import LiteLLMModel, InferenceClientModel
 
 class CSVTagger:
     def __init__(self, model_provider: str, model_name: str):
         """Initialize the CSV tagger with specified model."""
         self.model_provider = model_provider
         self.model_name = model_name
-        self.agent = None
-        self.prompt_template = self._load_prompt_template()
-        self._setup_agent()
+        self.model = None
+        self._setup_model()
     
-    def _load_prompt_template(self) -> str:
-        """Load the row tagging prompt template."""
-        prompt_path = Path(__file__).parent / "prompts" / "row_tagging.txt"
-        try:
-            with open(prompt_path, 'r') as f:
-                return f.read()
-        except FileNotFoundError:
-            print(f"Error: Prompt template not found at {prompt_path}", file=sys.stderr)
-            sys.exit(1)
-    
-    def _setup_agent(self):
-        """Set up the smolagents CodeAgent with the specified model."""
-        try:
+    def _setup_model(self):
+        """Set up smolagents LiteLLM model."""
+        try:            
+            # Configure LiteLLM based on provider using smolagents
             if self.model_provider == "ollama":
-                # Use local Ollama model
-                from litellm import completion
-                
-                class OllamaModel:
-                    def __init__(self, model_name):
-                        self.model_name = f"ollama/{model_name}"
-                    
-                    def __call__(self, messages, **kwargs):
-                        response = completion(
-                            model=self.model_name,
-                            messages=messages,
-                            **kwargs
-                        )
-                        return response.choices[0].message.content
-                
-                model = OllamaModel(self.model_name)
-                
+                self.model = LiteLLMModel(
+                    model_id=f"ollama/{self.model_name}",
+                    api_base="http://localhost:11434",
+                    api_key="ollama",
+                    temperature=0.1,
+                    max_tokens=50
+                )
             elif self.model_provider == "openai":
-                # Use OpenAI model
-                from litellm import completion
-                
-                class OpenAIModel:
-                    def __init__(self, model_name):
-                        self.model_name = model_name
-                    
-                    def __call__(self, messages, **kwargs):
-                        response = completion(
-                            model=self.model_name,
-                            messages=messages,
-                            **kwargs
-                        )
-                        return response.choices[0].message.content
-                
-                model = OpenAIModel(self.model_name)
-                
+                self.model = LiteLLMModel(
+                    model_id=self.model_name,  # e.g., "gpt-4", "gpt-3.5-turbo"
+                    temperature=0.1,
+                    max_tokens=50
+                    # API key will be read from OPENAI_API_KEY env var
+                )
+            elif self.model_provider == "anthropic":
+                self.model = LiteLLMModel(
+                    model_id=self.model_name,  # e.g., "claude-3-5-sonnet-20241022"
+                    temperature=0.1,
+                    max_tokens=50
+                    # API key will be read from ANTHROPIC_API_KEY env var
+                )
+            elif self.model_provider == "huggingface":
+                from smolagents import InferenceClientModel
+                self.model = InferenceClientModel()
             else:
-                # Default to HuggingFace Inference API
-                model = InferenceClientModel()
-            
-            # Create CodeAgent
-            self.agent = CodeAgent(
-                tools=[],
-                model=model,
-                add_base_tools=True,
-                additional_authorized_imports=["pandas", "json"]
-            )
+                raise ValueError(
+                    f"Unsupported model provider: {self.model_provider}. "
+                    f"Supported providers: ollama, openai, anthropic, huggingface"
+                )
             
         except Exception as e:
-            print(f"Error setting up agent: {e}", file=sys.stderr)
+            print(f"Error setting up model: {e}", file=sys.stderr)
             sys.exit(1)
     
     def load_ontology(self, ontology_path: str) -> Dict[str, Any]:
@@ -98,31 +71,42 @@ class CSVTagger:
             print(f"Error loading ontology: {e}", file=sys.stderr)
             sys.exit(1)
     
-    def tag_row(self, row_data: Dict[str, Any], ontology: Dict[str, Any]) -> str:
-        """Tag a single row using the ontology."""
+    def tag_row(self, row_data: Dict[str, Any], ontology_summary: str) -> str:
+        """Tag a single row using a concise ontology summary. Returns comma-separated tags."""
         
-        # Format the prompt with row data and ontology
-        prompt = self.prompt_template.format(
-            ontology=json.dumps(ontology.get("ontology", {}), indent=2),
-            row_data=json.dumps(row_data, indent=2)
-        )
+        # Create a much more concise prompt with formatting instructions
+        row_text = " | ".join([f"{k}: {v}" for k, v in row_data.items() if v is not None])
+        
+        prompt = f"""Available tags: {ontology_summary}
+Row data: {row_text}
+
+Return matching tags as lowercase, no-spaces, comma-separated (e.g., "customer-service,urgent"):"""
         
         try:
-            # Run the agent to get the tag
-            result = self.agent.run(prompt)
+            # Use correct smolagents LiteLLMModel format from documentation
+            messages = [
+                {"role": "user", "content": [{"type": "text", "text": prompt}]}
+            ]
             
-            # Clean up the result (remove any extra whitespace/newlines)
-            tag = result.strip()
+            # Call the model with proper message format
+            response = self.model(messages)
             
-            # Validate that the tag exists in the ontology
-            valid_tags = list(ontology.get("ontology", {}).keys()) + ["untagged"]
+            # Extract the response text
+            if hasattr(response, 'content'):
+                tags_string = response.content.strip()
+            elif hasattr(response, 'text'):
+                tags_string = response.text.strip()
+            else:
+                tags_string = str(response).strip()
             
-            if tag not in valid_tags:
-                print(f"Warning: Agent returned invalid tag '{tag}', using 'untagged'", 
-                      file=sys.stderr)
+            # Parse multiple tags (comma-separated)
+            proposed_tags = [tag.strip() for tag in tags_string.split(',') if tag.strip()]
+            
+            # Simple validation - just return the proposed tags
+            if not proposed_tags or not any(proposed_tags):
                 return "untagged"
             
-            return tag
+            return ",".join(proposed_tags)
             
         except Exception as e:
             print(f"Error tagging row: {e}", file=sys.stderr)
@@ -132,15 +116,19 @@ class CSVTagger:
                 columns: List[str] = None) -> None:
         """Tag entire CSV file and save results."""
         
-        # Load ontology
+        # Load ontology and create concise summary
         ontology = self.load_ontology(ontology_path)
+        ontology_tags = ontology.get('ontology', {})
+        tag_names = list(ontology_tags.keys())
+        ontology_summary = ", ".join(tag_names)
+        print(f"✨ smolten sparks are flying… warming up the lava pool with {len(ontology_tags)} bubbly tags!", file=sys.stderr)
         
         # Load CSV
         try:
             df = pd.read_csv(csv_path)
-            print(f"Loaded CSV with {len(df)} rows", file=sys.stderr)
+            print(f"🥄 scooped up 1 CSV and dropped it into the lava bath!", file=sys.stderr)
         except Exception as e:
-            print(f"Error loading CSV: {e}", file=sys.stderr)
+            print(f"🥵 too spicy! CSV melted into invalid goo: {e}", file=sys.stderr)
             sys.exit(1)
         
         # Filter to specified columns if provided
@@ -148,25 +136,38 @@ class CSVTagger:
             available_columns = [col for col in columns if col in df.columns]
             if available_columns:
                 tagging_df = df[available_columns].copy()
-                print(f"Focusing on columns: {', '.join(available_columns)}", file=sys.stderr)
+                print(f"🌶️  focusing the heat on columns: {', '.join(available_columns)}", file=sys.stderr)
             else:
-                print(f"Warning: None of the specified columns {columns} found in CSV", 
-                      file=sys.stderr)
+                print(f"⚠️ smolten hissed—those columns don't like the heat: {columns}", file=sys.stderr)
                 tagging_df = df.copy()
         else:
             tagging_df = df.copy()
         
         # Add tags column
         tags = []
+        total_rows = len(tagging_df)
         
-        # Tag each row
+        if total_rows < 100:
+            print(f"🔥 smolten is bubbling over {total_rows} rows, nice and toasty!", file=sys.stderr)
+        else:
+            print(f"🌶️  melting through {total_rows} rows—spicy data soup incoming!", file=sys.stderr)
+        
+        # Tag each row with progress updates
         for idx, row in tagging_df.iterrows():
-            if idx % 100 == 0:
-                print(f"Tagging row {idx + 1}/{len(tagging_df)}", file=sys.stderr)
+            if idx % 25 == 0 or idx == total_rows - 1:
+                progress = ((idx + 1) / total_rows) * 100
+                if progress < 50:
+                    print(f"\r🌋 bubbling to life… {idx + 1}/{total_rows} ({progress:.0f}%)", 
+                          end="", file=sys.stderr)
+                else:
+                    print(f"\r🍯 gooey goodness brewing… {idx + 1}/{total_rows} ({progress:.0f}%)", 
+                          end="", file=sys.stderr)
             
             row_dict = row.to_dict()
-            tag = self.tag_row(row_dict, ontology)
+            tag = self.tag_row(row_dict, ontology_summary)
             tags.append(tag)
+        
+        print("", file=sys.stderr)  # New line after progress
         
         # Add tags to original dataframe
         df['smolten_tag'] = tags
@@ -174,17 +175,29 @@ class CSVTagger:
         # Save tagged CSV
         try:
             df.to_csv(output_path, index=False)
-            print(f"Tagged CSV saved to {output_path}", file=sys.stderr)
+            print(f"🌋 eruption complete—smolten cools with satisfaction!", file=sys.stderr)
         except Exception as e:
-            print(f"Error saving tagged CSV: {e}", file=sys.stderr)
+            print(f"🥵 too spicy! output melted before saving: {e}", file=sys.stderr)
             sys.exit(1)
         
-        # Print tag distribution
-        tag_counts = pd.Series(tags).value_counts()
-        print(f"Tag distribution:", file=sys.stderr)
-        for tag, count in tag_counts.items():
-            percentage = (count / len(tags)) * 100
-            print(f"  {tag}: {count} ({percentage:.1f}%)", file=sys.stderr)
+        # Print compact tag distribution with cute messages
+        all_individual_tags = []
+        for tag_string in tags:
+            individual_tags = [tag.strip() for tag in tag_string.split(',') if tag.strip()]
+            all_individual_tags.extend(individual_tags)
+        
+        tag_counts = pd.Series(all_individual_tags).value_counts()
+        multi_tag_rows = sum(1 for tag_string in tags if ',' in tag_string)
+        
+        top_tags = dict(tag_counts.head(3))
+        if top_tags:
+            top_tag_name = list(top_tags.keys())[0]
+            print(f"💫 smolten's favorite flavor: *{top_tag_name}* (appeared {top_tags[top_tag_name]} times)", file=sys.stderr)
+        
+        if multi_tag_rows > 0:
+            print(f"🍯 extra gooey! {multi_tag_rows} rows got multiple tags", file=sys.stderr)
+        
+        print(f"✨ molten job well done, cooling down…", file=sys.stderr)
 
 def main():
     parser = argparse.ArgumentParser(description="Tag CSV rows using ontology")

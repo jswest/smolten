@@ -11,11 +11,12 @@ Requirements:
 3. Consider the content, patterns, and themes in the data
 4. Each tag should have a clear description
 5. Provide examples of which rows would match each tag
+6. IMPORTANT: Tag names must be lowercase with hyphens instead of spaces (e.g., "customer-service", "billing-issue", "urgent-request")
 
 Return a JSON object with this structure:
 {{
     "ontology": {{
-        "tag_name_1": {{
+        "example-tag": {{
             "description": "Clear description of what this tag represents",
             "criteria": "Specific criteria for assigning this tag",
             "examples": ["Example patterns or keywords that would match"]

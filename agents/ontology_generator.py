@@ -36,51 +36,40 @@ class OntologyGenerator:
     def _setup_agent(self):
         """Set up the smolagents CodeAgent with the specified model."""
         try:
+            # Use smolagents' LiteLLMModel for multi-provider support
+            from smolagents import LiteLLMModel
+            
+            # Configure LiteLLM based on provider
             if self.model_provider == "ollama":
-                # Use local Ollama model
-                from litellm import completion
-                
-                class OllamaModel:
-                    def __init__(self, model_name):
-                        self.model_name = f"ollama/{model_name}"
-                    
-                    def __call__(self, messages, **kwargs):
-                        response = completion(
-                            model=self.model_name,
-                            messages=messages,
-                            **kwargs
-                        )
-                        return response.choices[0].message.content
-                
-                model = OllamaModel(self.model_name)
-                
+                model = LiteLLMModel(
+                    model_id=f"ollama/{self.model_name}",
+                    api_base="http://localhost:11434",
+                    api_key="ollama"
+                )
             elif self.model_provider == "openai":
-                # Use OpenAI model
-                from litellm import completion
-                
-                class OpenAIModel:
-                    def __init__(self, model_name):
-                        self.model_name = model_name
-                    
-                    def __call__(self, messages, **kwargs):
-                        response = completion(
-                            model=self.model_name,
-                            messages=messages,
-                            **kwargs
-                        )
-                        return response.choices[0].message.content
-                
-                model = OpenAIModel(self.model_name)
-                
-            else:
-                # Default to HuggingFace Inference API
+                model = LiteLLMModel(
+                    model_id=self.model_name,  # e.g., "gpt-4", "gpt-3.5-turbo"
+                    # API key will be read from OPENAI_API_KEY env var
+                )
+            elif self.model_provider == "anthropic":
+                model = LiteLLMModel(
+                    model_id=self.model_name,  # e.g., "claude-3-5-sonnet-20241022"
+                    # API key will be read from ANTHROPIC_API_KEY env var
+                )
+            elif self.model_provider == "huggingface":
+                from smolagents import InferenceClientModel
                 model = InferenceClientModel()
+            else:
+                raise ValueError(
+                    f"Unsupported model provider: {self.model_provider}. "
+                    f"Supported providers: ollama, openai, anthropic, huggingface"
+                )
             
             # Create CodeAgent with CSV analysis capabilities
             self.agent = CodeAgent(
                 tools=[],
                 model=model,
-                add_base_tools=True,
+                add_base_tools=False,
                 additional_authorized_imports=[
                     "pandas", "numpy", "json", "collections", "itertools"
                 ]
@@ -122,6 +111,9 @@ class OntologyGenerator:
     def generate_ontology(self, df: pd.DataFrame, tag_count: int = 10) -> Dict[str, Any]:
         """Generate tag ontology from DataFrame using the agent."""
         
+        print(f"🌋 bubbling to life… your smolten agent awakens!", file=sys.stderr)
+        print(f"🍯 your smolten pot just slurped down {df.shape[0]} rows of delicious data!", file=sys.stderr)
+        
         # Prepare data for the prompt
         sample_data = json.dumps(df.head(5).to_dict('records'), indent=2)
         columns = ', '.join(df.columns)
@@ -135,26 +127,39 @@ class OntologyGenerator:
             tag_count=tag_count
         )
         
+        print(f"🌶️  preparing a spicy {len(prompt)}-character recipe for the AI chef…", file=sys.stderr)
+        
         try:
-            # Run the agent to generate ontology
-            result = self.agent.run(prompt)
-            
-            # Try to extract JSON from the response
-            import re
-            json_match = re.search(r'```json\s*(.*?)\s*```', result, re.DOTALL)
-            if json_match:
-                ontology_json = json_match.group(1)
+            # Try to get streaming response if possible
+            if hasattr(self.agent.model, 'generate') and self.model_provider == "ollama":
+                result = self._generate_with_streaming(prompt)
             else:
-                # Try to find JSON in the response without code blocks
-                json_start = result.find('{')
-                json_end = result.rfind('}') + 1
-                if json_start != -1 and json_end > json_start:
-                    ontology_json = result[json_start:json_end]
-                else:
-                    ontology_json = result
+                result = self.agent.run(prompt)
             
-            ontology = json.loads(ontology_json)
-            return ontology
+            print(f"🍯 mmm, the AI chef cooked up {len(str(result))} chars of gooey goodness!", file=sys.stderr)
+            
+            # Handle different response types
+            if isinstance(result, dict):
+                return result
+            elif isinstance(result, str):
+                # Parse JSON from string response
+                import re
+                json_match = re.search(r'```json\s*(.*?)\s*```', result, re.DOTALL)
+                if json_match:
+                    ontology_json = json_match.group(1)
+                else:
+                    json_start = result.find('{')
+                    json_end = result.rfind('}') + 1
+                    if json_start != -1 and json_end > json_start:
+                        ontology_json = result[json_start:json_end]
+                    else:
+                        ontology_json = result
+                
+                ontology = json.loads(ontology_json)
+                print("💫 smolten crystallized the molten data into perfect tag gems!", file=sys.stderr)
+                return ontology
+            else:
+                raise ValueError(f"Unexpected response type: {type(result)}")
             
         except json.JSONDecodeError as e:
             print(f"Error parsing ontology JSON: {e}", file=sys.stderr)
@@ -163,6 +168,61 @@ class OntologyGenerator:
         except Exception as e:
             print(f"Error generating ontology: {e}", file=sys.stderr)
             sys.exit(1)
+    
+    def _generate_with_streaming(self, prompt):
+        """Generate response with streaming output for Ollama."""
+        try:
+            import requests
+            import json as json_module
+            
+            response = requests.post(
+                "http://localhost:11434/api/generate",
+                json={
+                    "model": self.model_name,
+                    "prompt": prompt,
+                    "stream": True
+                },
+                stream=True
+            )
+            response.raise_for_status()
+            
+            full_response = ""
+            token_count = 0
+            
+            for line in response.iter_lines():
+                if line:
+                    try:
+                        data = json_module.loads(line.decode('utf-8'))
+                        if 'response' in data:
+                            token = data['response']
+                            full_response += token
+                            token_count += len(token.split())
+                            
+                            # Show token count every 100 tokens with k notation
+                            if token_count % 100 == 0:
+                                if token_count >= 1000:
+                                    display_count = f"{token_count/1000:.1f}k"
+                                else:
+                                    display_count = f"{token_count/1000:.1f}k"
+                                print(f"\r🔥 simmering… {display_count} tokens bubbling", end="", file=sys.stderr)
+                        
+                        if data.get('done', False):
+                            break
+                    except json_module.JSONDecodeError:
+                        continue
+            
+            # Format final token count with k notation
+            if token_count >= 1000:
+                display_count = f"{token_count/1000:.1f}k"
+            else:
+                display_count = f"{token_count/1000:.1f}k"
+            print(f"\r🌋 eruption complete! {display_count} molten tokens poured out", file=sys.stderr)
+            
+            return full_response
+            
+        except Exception as e:
+            print(f"⚠️ smolten hissed—streaming got too hot, switching to standard mode: {e}", file=sys.stderr)
+            return self.agent.run(prompt)
 
 def main():
     parser = argparse.ArgumentParser(description="Generate tag ontology from CSV data")
@@ -199,14 +259,11 @@ def main():
     with open(args.output_path, 'w') as f:
         json.dump(ontology, f, indent=2)
     
-    print(f"Ontology saved to {args.output_path}", file=sys.stderr)
-    
     # Print summary
     if "ontology" in ontology:
         tag_count = len(ontology["ontology"])
-        print(f"Generated {tag_count} tags:", file=sys.stderr)
-        for tag_name in ontology["ontology"].keys():
-            print(f"  - {tag_name}", file=sys.stderr)
+        tag_names = list(ontology["ontology"].keys())
+        print(f"💎 smolten forged {tag_count} perfect gems: {', '.join(tag_names)}", file=sys.stderr)
 
 if __name__ == "__main__":
     main()
