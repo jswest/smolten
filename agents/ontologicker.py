@@ -2,6 +2,14 @@ import argparse
 import json
 import os
 import sys
+import logging
+
+# Suppress external library logging completely
+logging.getLogger("litellm").setLevel(logging.ERROR)
+logging.getLogger("smolagents").setLevel(logging.ERROR)
+logging.getLogger("urllib3").setLevel(logging.ERROR)
+logging.getLogger("httpx").setLevel(logging.ERROR)
+logging.getLogger("openai").setLevel(logging.ERROR)
 
 import litellm
 from smolagents import (
@@ -10,6 +18,10 @@ from smolagents import (
   PythonInterpreterTool,
   Tool
 )
+
+# Suppress litellm logging
+litellm.suppress_debug_info = True
+litellm.set_verbose = False
 
 # Provider configuration mapping
 PROVIDER_CONFIG = {
@@ -64,8 +76,21 @@ class FinalOntologyTool(Tool):
         return json.dumps({"tags": tags, "notes": notes})
 
 
-def lava(msg, end="\n"):
-    print(f"\r🌋 {msg}", file=sys.stderr, end=end, flush=True)
+def progress(message, progress_type="status", percentage=None, emoji="🌋"):
+    """Send structured progress update to Node.js"""
+    progress_data = {
+        "type": progress_type,
+        "message": message,
+        "emoji": emoji
+    }
+    if percentage is not None:
+        progress_data["percentage"] = percentage
+    
+    print(f"SMOLTEN_PROGRESS:{json.dumps(progress_data)}", file=sys.stderr, flush=True)
+
+def lava(msg):
+    """Simple molten message for compatibility"""
+    print(f"🌋 {msg}", file=sys.stderr, flush=True)
 
 def main():
     p = argparse.ArgumentParser(description="Generate a tag ontology from a CSV using smolagents")
@@ -104,7 +129,7 @@ def main():
         print(f"❌ API key required for {provider}", file=sys.stderr)
         sys.exit(1)
     
-    lava("warming the lava pool…")
+    progress("warming the lava pool", "status")
     llm_kwargs = {
         "model_id": model_name,
         "api_base": config["api_base"],
@@ -158,12 +183,12 @@ Constraints:
 {args.additional_prompt}
 """
 
-    lava("bubbling over your CSV…", end="")
+    progress("analyzing your CSV data", "progress")
     try:
         result = agent.run(user_task)
     except Exception as e:
         print(f"\n🥵 smolten hissed: {e}", file=sys.stderr); sys.exit(1)
-    lava(" eruption complete!")
+    progress("ontology generation complete", "complete", emoji="💎")
 
     # Parse whatever came back (string or dict) as JSON
     try:
@@ -187,10 +212,10 @@ Constraints:
     # Cute summary log
     tag_names = list((ontology.get("ontology") or {}).keys())
     if tag_names:
-        gems = ", ".join(tag_names[:8]) + ("…" if len(tag_names) > 8 else "")
-        lava(f"forged {len(tag_names)} shiny gems: {gems}")
+        gems = ", ".join(tag_names[:4]) + ("…" if len(tag_names) > 4 else "")
+        progress(f"forged {len(tag_names)} gems: {gems}", "complete", emoji="💎")
     else:
-        lava("forged an empty gem pile (no tags?)")
+        progress("no tags generated", "error", emoji="⚠️")
 
 if __name__ == "__main__":
     main()

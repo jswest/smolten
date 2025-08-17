@@ -3,6 +3,14 @@ import argparse
 import json
 import os
 import sys
+import logging
+
+# Suppress external library logging completely
+logging.getLogger("litellm").setLevel(logging.ERROR)
+logging.getLogger("smolagents").setLevel(logging.ERROR)
+logging.getLogger("urllib3").setLevel(logging.ERROR)
+logging.getLogger("httpx").setLevel(logging.ERROR)
+logging.getLogger("openai").setLevel(logging.ERROR)
 
 import litellm
 from smolagents import (
@@ -11,6 +19,10 @@ from smolagents import (
   LiteLLMModel,
   PythonInterpreterTool
 )
+
+# Suppress litellm logging
+litellm.suppress_debug_info = True
+litellm.set_verbose = False
 
 # Provider configuration mapping
 PROVIDER_CONFIG = {
@@ -41,8 +53,21 @@ if os.getenv("SMOLTEN_DEBUG"):
     litellm._turn_on_debug()
 
 
-def lava(msg, end="\n"):
-    print(f"🌋 {msg}", file=sys.stderr, end=end, flush=True)
+def progress(message, progress_type="status", percentage=None, emoji="🌋"):
+    """Send structured progress update to Node.js"""
+    progress_data = {
+        "type": progress_type,
+        "message": message,
+        "emoji": emoji
+    }
+    if percentage is not None:
+        progress_data["percentage"] = percentage
+    
+    print(f"SMOLTEN_PROGRESS:{json.dumps(progress_data)}", file=sys.stderr, flush=True)
+
+def lava(msg):
+    """Simple molten message for compatibility"""
+    print(f"🌋 {msg}", file=sys.stderr, flush=True)
 
 def main():
     p = argparse.ArgumentParser(description="General CSV row tagger with editorial judgment (smolagents, 1 pass)")
@@ -164,10 +189,11 @@ Implementation tips:
 - Keep label_row concise and readable.
 """
 
-    lava("bubbling to life… editorial tagging in one pass…", end="")
+    progress("starting editorial tagging", "status")
     summary = agent.run(TASK, max_steps=args.max_steps)
-    lava(" eruption complete!\n")
-    print(summary)
+    progress("tagging complete", "complete", emoji="💎")
+    # Summary is handled by Node.js side
+    pass
 
 if __name__ == "__main__":
     main()

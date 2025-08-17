@@ -114,6 +114,20 @@ Tags are generated in lowercase with hyphens (e.g., `customer-service`, `billing
 - **Python** 3.8+ (automatically set up on first run)
 - **Model Access**: Local Ollama installation or API keys for cloud providers
 
-## Status
+## 🚨 Development Status
 
-✅ **Production Ready** - Core functionality complete with cute molten magic!
+⚠️ **Beta - Known Issues** - Core functionality implemented but requires fixes before production use.
+
+### Current Issues
+- 🐛 Import errors in Python agents affecting runtime stability
+- 🔧 Configuration inconsistencies between Node.js and Python components  
+- ⚡ Missing error handling for malformed CSV/JSON files
+- 🔒 Potential security issue with string injection in tagging templates
+
+### Recent Fixes
+- ✅ Fixed missing `join` import in csv-processor.js
+- ✅ Fixed `userOutput` vs `cliOutput` inconsistency in cli.js
+- ✅ Added missing `DEFAULTS` import in utils.js
+
+### Next Steps
+See `TODOS.md` for detailed issue tracking and completion roadmap.
