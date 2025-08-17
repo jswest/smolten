@@ -26,6 +26,7 @@
     "chalk": "^5.5.0",
     "commander": "^14.0.0",
     "csv-parser": "^3.2.0",
+    "dotenv": "^17.2.1",
     "pino": "^9.9.0",
     "pino-pretty": "^13.1.1"
   }

@@ -1,0 +1,16 @@
+Tag this CSV row using the provided ontology.
+
+Ontology:
+{ontology}
+
+Row data to tag:
+{row_data}
+
+Instructions:
+1. Analyze the row data against each tag in the ontology
+2. Select the MOST APPROPRIATE single tag that best matches this row
+3. Consider the tag descriptions, criteria, and examples provided
+4. If no tag is a good fit, select "untagged"
+5. Return ONLY the tag name, nothing else
+
+Tag this row:
