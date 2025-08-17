@@ -1,0 +1,149 @@
+import argparse
+import json
+import os
+import sys
+
+import litellm
+from smolagents import (
+  CodeAgent,
+  LiteLLMModel,
+  PythonInterpreterTool,
+  Tool
+)
+
+MIN_SYSTEM = (
+    "You are smolten, a compact CSV-tagging assistant.\n"
+    "Use Python only when needed via the provided python tool.\n"
+    "Return a single strict JSON object exactly matching the user schema.\n"
+    "No prose, no markdown fences, no Thought/Code/Observation logs.\n"
+    "Use snake_case for keys."
+)
+
+
+class FinalOntologyTool(Tool):
+    name = "final_ontology"
+    description = "Return the final tags-only JSON object (dict of name: description)."
+    inputs = {
+        "tags": {
+            "type": "object",
+            "description": "an object with keys that are the names of the tags and values that are the descriptions."
+        },
+        "notes": {
+            "type": "string",
+            "description": "Any notes about this ontology.",
+            "nullable": True,
+        }
+    }
+    output_type = "string"
+
+    def forward(self, tags, notes=""):
+        return json.dumps({"tags": tags, "notes": notes})
+
+
+def lava(msg, end="\n"):
+    print(f"\r🌋 {msg}", file=sys.stderr, end=end, flush=True)
+
+def main():
+    p = argparse.ArgumentParser(description="Generate a tag ontology from a CSV using smolagents")
+    p.add_argument("csv_path", help="Path to CSV")
+    p.add_argument("output_path", help="Where to write ontology JSON")
+    p.add_argument(
+        "--model",
+        default=os.getenv("SMOL_MODEL", "gpt-4o-mini"),
+        help="litellm model id (e.g. gpt-4o-mini, anthropic/claude-3-5-sonnet, ollama/llama3.1)"
+    )
+    p.add_argument("--tag-count", type=int, default=10)
+    p.add_argument("--sample-size", type=int, default=1000)
+    p.add_argument("--columns", help="Comma-separated columns to prefer", default="")
+    p.add_argument("--additional-prompt", type=str, default="")
+    args = p.parse_args()
+
+    if not os.path.exists(args.csv_path):
+        print(f"❌ CSV not found: {args.csv_path}", file=sys.stderr); sys.exit(1)
+
+    lava("warming the lava pool…")
+    llm = LiteLLMModel(
+        model_id="gpt-oss:20b",
+        api_base="http://localhost:11434/v1",
+        api_key="ollama",
+        custom_llm_provider="openai",
+    )
+
+    py = PythonInterpreterTool(
+        authorized_imports=["pandas", "json", "re", "itertools", "collections"],
+        description="Run short Python snippets."
+    )
+
+    final_tool = FinalOntologyTool()
+    agent = CodeAgent(
+        tools=[py, final_tool],
+        model=llm,
+        instructions=MIN_SYSTEM,
+        add_base_tools=False,
+        max_steps=4,
+        verbosity_level=0
+    )
+
+    # Single instruction: the agent should *do* the python work and return strict JSON.
+    cols_hint = [c.strip() for c in args.columns.split(",")] if args.columns else []
+    user_task = f"""
+You are a data tagging assistant. Use Python code when helpful.
+
+Task:
+1) Load the CSV at path: {args.csv_path!r} with pandas.
+2) If there are more than {args.sample_size} rows, randomly sample {args.sample_size} with a fixed random_state=42.
+3) Prefer columns (if present): {cols_hint}
+4) Define a set of reusable ROW-LEVEL tags (i.e., labels applied to individual records based on their values)!
+5) Return ONLY a strict JSON object matching this shape (no markdown fences, no extra text):
+
+{{
+  "ontology": {{
+    "tag_name": "description": "what the tag means",
+  }},
+  "notes": "optional brief notes or assumptions"
+}}
+
+Constraints:
+- Tag names must be lowercased, contain no commas, and be dashed rather spaced out.
+- Keep total response under 20k characters.
+- Do not print code output; only return the final JSON object.
+
+{args.additional_prompt}
+"""
+
+    lava("bubbling over your CSV…", end="")
+    try:
+        result = agent.run(user_task)
+    except Exception as e:
+        print(f"\n🥵 smolten hissed: {e}", file=sys.stderr); sys.exit(1)
+    lava(" eruption complete!")
+
+    # Parse whatever came back (string or dict) as JSON
+    try:
+        if isinstance(result, dict):
+            ontology = result
+        else:
+            # Trim accidental fences if any
+            s = str(result).strip()
+            if s.startswith("```"):
+                s = s.strip("` \n")
+                s = s[s.find("\n")+1:] if "\n" in s else s
+            ontology = json.loads(s)
+    except Exception as e:
+        print(f"⚠️ could not parse JSON from agent: {e}\n--- RAW ---\n{result}", file=sys.stderr)
+        sys.exit(1)
+
+    # Write output
+    with open(args.output_path, "w") as f:
+        json.dump(ontology, f, indent=2)
+
+    # Cute summary log
+    tag_names = list((ontology.get("ontology") or {}).keys())
+    if tag_names:
+        gems = ", ".join(tag_names[:8]) + ("…" if len(tag_names) > 8 else "")
+        lava(f"forged {len(tag_names)} shiny gems: {gems}")
+    else:
+        lava("forged an empty gem pile (no tags?)")
+
+if __name__ == "__main__":
+    main()
