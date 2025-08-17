@@ -15,4 +15,13 @@ The agent has two modes:
 - Allow users to choose a local model via ollama (e.g., `gpt-oss:20b`) or a fronteir provider.
 - Use `smolagents` from HuggingFace as the backend.
 
+## Code Style Preferences
+
+- Use double quotes for strings
+- Group imports by category (standard library, third-party, local) with blank lines between
+- Use forward slashes (/) as separators in CLI options (e.g., `ollama/gpt-oss:20b`)
+- Use kebab-case for CLI option names (e.g., `--tag-count` not `--tags`)
+- Use trailing commas in objects and arrays
+- No newlines at end of files
+
 

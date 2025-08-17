@@ -16,10 +16,10 @@
 
 ## Implementation Tasks
 
-### Phase 1: Project Setup
-- [ ] Initialize Node.js project with package.json and dependencies
-- [ ] Set up basic CLI structure with argument parsing
-- [ ] Integrate pino logging to file and console
+### Phase 1: Project Setup ✅
+- [x] Initialize Node.js project with package.json and dependencies
+- [x] Set up basic CLI structure with argument parsing
+- [x] Integrate pino logging to file and console
 
 ### Phase 2: Model Integration
 - [ ] Implement model provider selection (Ollama local vs frontier providers)
@@ -43,22 +43,32 @@
 ### File Structure
 ```
 smolten/
-├── package.json
-├── src/
+│—— agents/
+│   ├── ontology-generator.py
+│   └── tagger.py
+├── lib/
 │   ├── cli.js (main CLI entry)
-│   ├── logger.js (pino setup)
-│   └── agents/
-│       ├── ontology-generator.py
-│       └── tagger.py
+│   └── logger.js (pino setup)
 ├── logs/
-└── README.md
+├── .gitignore
+├── .venv
+├── CLAUDE.md
+├── index.js (the main script, which passes off to `lib/cli.js`)
+├── package.json
+├── package-lock.json
+├── README.md
+├── requirements.txt
+└── TODOS.md
 ```
 
 ### CLI Interface
 ```bash
 smolten <input.csv> <output.csv> [options]
-  --columns <list>     Relevant columns to focus on
-  --ontology <file>    Existing ontology file
-  --model <provider>   Model provider (ollama:model-name or openai:gpt-4)
-  --tags <number>      Rough number of tags for ontology generation
+  -c, --columns <columns>        Comma-separated list of relevant columns to focus on
+  -o, --ontology <file>          Existing ontology file path
+  -m, --model <provider/model>   Model provider and name (e.g., "ollama/llama2" or "openai/gpt-4")
+  -t, --tag-count <number>       Rough number of tags for ontology generation (default: 10)
+  --skip-ontology               Skip ontology generation and use existing ontology
+  --sample-size <number>        Number of rows to sample for ontology generation (default: 1000)
+  --log-level <level>           Log level (error, warn, info, debug) (default: info)
 ```
