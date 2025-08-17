@@ -11,6 +11,30 @@ from smolagents import (
   Tool
 )
 
+# Provider configuration mapping
+PROVIDER_CONFIG = {
+    "ollama": {
+        "api_base": "http://localhost:11434/v1",
+        "api_key": "ollama",
+        "custom_llm_provider": "openai"
+    },
+    "openai": {
+        "api_base": "https://api.openai.com/v1",
+        "api_key": os.getenv("OPENAI_API_KEY"),
+        "custom_llm_provider": None
+    },
+    "anthropic": {
+        "api_base": "https://api.anthropic.com",
+        "api_key": os.getenv("ANTHROPIC_API_KEY"),
+        "custom_llm_provider": None
+    },
+    "huggingface": {
+        "api_base": "https://api-inference.huggingface.co",
+        "api_key": os.getenv("HUGGINGFACE_API_KEY"),
+        "custom_llm_provider": None
+    }
+}
+
 MIN_SYSTEM = (
     "You are smolten, a compact CSV-tagging assistant.\n"
     "Use Python only when needed via the provided python tool.\n"
@@ -61,13 +85,36 @@ def main():
     if not os.path.exists(args.csv_path):
         print(f"❌ CSV not found: {args.csv_path}", file=sys.stderr); sys.exit(1)
 
+    # Parse model provider and name
+    if "/" in args.model:
+        provider, model_name = args.model.split("/", 1)
+    else:
+        provider = "openai"  # Default provider
+        model_name = args.model
+    
+    # Get provider configuration
+    if provider not in PROVIDER_CONFIG:
+        print(f"❌ Unsupported provider: {provider}", file=sys.stderr)
+        sys.exit(1)
+    
+    config = PROVIDER_CONFIG[provider]
+    api_key = config["api_key"] or os.getenv("SMOLTEN_API_KEY")
+    
+    if provider != "ollama" and not api_key:
+        print(f"❌ API key required for {provider}", file=sys.stderr)
+        sys.exit(1)
+    
     lava("warming the lava pool…")
-    llm = LiteLLMModel(
-        model_id="gpt-oss:20b",
-        api_base="http://localhost:11434/v1",
-        api_key="ollama",
-        custom_llm_provider="openai",
-    )
+    llm_kwargs = {
+        "model_id": model_name,
+        "api_base": config["api_base"],
+        "api_key": api_key,
+    }
+    
+    if config["custom_llm_provider"]:
+        llm_kwargs["custom_llm_provider"] = config["custom_llm_provider"]
+    
+    llm = LiteLLMModel(**llm_kwargs)
 
     py = PythonInterpreterTool(
         authorized_imports=["pandas", "json", "re", "itertools", "collections"],

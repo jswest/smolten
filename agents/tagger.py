@@ -12,7 +12,33 @@ from smolagents import (
   PythonInterpreterTool
 )
 
-litellm._turn_on_debug()
+# Provider configuration mapping
+PROVIDER_CONFIG = {
+    "ollama": {
+        "api_base": "http://localhost:11434/v1",
+        "api_key": "ollama",
+        "custom_llm_provider": "openai"
+    },
+    "openai": {
+        "api_base": "https://api.openai.com/v1",
+        "api_key": os.getenv("OPENAI_API_KEY"),
+        "custom_llm_provider": None
+    },
+    "anthropic": {
+        "api_base": "https://api.anthropic.com",
+        "api_key": os.getenv("ANTHROPIC_API_KEY"),
+        "custom_llm_provider": None
+    },
+    "huggingface": {
+        "api_base": "https://api-inference.huggingface.co",
+        "api_key": os.getenv("HUGGINGFACE_API_KEY"),
+        "custom_llm_provider": None
+    }
+}
+
+# Only enable debug for development
+if os.getenv("SMOLTEN_DEBUG"):
+    litellm._turn_on_debug()
 
 
 def lava(msg, end="\n"):
@@ -35,11 +61,28 @@ def main():
         ontology = json.load(ontology_file)
     ontology_string = json.dumps(ontology["ontology"], ensure_ascii=False, separators=(",", ":"))
 
-    llm = LiteLLMModel(
-        model_id=args.model,
-        api_base="https://api.openai.com/v1",
-        api_key=os.getenv("OPENAI_API_KEY"),
-    )
+    # Get provider configuration
+    if args.provider not in PROVIDER_CONFIG:
+        print(f"❌ Unsupported provider: {args.provider}", file=sys.stderr)
+        sys.exit(1)
+    
+    config = PROVIDER_CONFIG[args.provider]
+    api_key = config["api_key"] or os.getenv("SMOLTEN_API_KEY")
+    
+    if args.provider != "ollama" and not api_key:
+        print(f"❌ API key required for {args.provider}", file=sys.stderr)
+        sys.exit(1)
+    
+    llm_kwargs = {
+        "model_id": args.model,
+        "api_base": config["api_base"],
+        "api_key": api_key,
+    }
+    
+    if config["custom_llm_provider"]:
+        llm_kwargs["custom_llm_provider"] = config["custom_llm_provider"]
+    
+    llm = LiteLLMModel(**llm_kwargs)
 
     py = PythonInterpreterTool(
         authorized_imports=["pandas","json","re","math","statistics","itertools","collections","datetime"],
