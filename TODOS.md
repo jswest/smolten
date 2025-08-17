@@ -57,8 +57,7 @@ smolten/
 │   ├── ontology_generator.py     # LiteLLM-powered ontology creation
 │   ├── tagger.py                 # Row-by-row tagging engine
 │   └── prompts/
-│       ├── ontology_generation.txt
-│       └── row_tagging.txt
+│       └── ontology_generation.txt
 ├── lib/
 │   ├── cli.js                    # Commander-based CLI interface
 │   ├── config.js                 # Inquirer configuration wizard
@@ -71,6 +70,7 @@ smolten/
 ├── logs/                         # Structured log files
 ├── .env                          # User configuration (gitignored)
 ├── .gitignore
+├── .nvmrc
 ├── CLAUDE.md                     # Project instructions
 ├── index.js                      # Main entry point
 ├── package.json
