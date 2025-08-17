@@ -1,10 +1,19 @@
 #!/usr/bin/env python3
-import os, sys, argparse, json
-from smolagents import CodeAgent, LiteLLMModel
-try:
-    from smolagents import PythonInterpreterTool as PyTool
-except ImportError:
-    from smolagents import PythonREPLTool as PyTool
+import argparse
+import json
+import os
+import sys
+
+import litellm
+from smolagents import (
+  CodeAgent,
+  FinalAnswerTool,
+  LiteLLMModel,
+  PythonInterpreterTool
+)
+
+litellm._turn_on_debug()
+
 
 def lava(msg, end="\n"):
     print(f"🌋 {msg}", file=sys.stderr, end=end, flush=True)
@@ -12,7 +21,7 @@ def lava(msg, end="\n"):
 def main():
     p = argparse.ArgumentParser(description="General CSV row tagger with editorial judgment (smolagents, 1 pass)")
     p.add_argument("csv_path")
-    p.add_argument("ontology_path")   # optional file with {"tags": {...}}; can be empty/minimal
+    p.add_argument("ontology_path")
     p.add_argument("output_path")
     p.add_argument("--model", default=os.getenv("SMOL_MODEL", "gpt-oss:20b"))
     p.add_argument("--api-base", default=os.getenv("SMOL_API_BASE", "http://localhost:11434/v1"))
@@ -22,38 +31,57 @@ def main():
     p.add_argument("--max-steps", type=int, default=4)
     args = p.parse_args()
 
+    with open(args.ontology_path, "r", encoding="utf-8") as ontology_file:
+        ontology = json.load(ontology_file)
+    ontology_string = json.dumps(ontology["ontology"], ensure_ascii=False, separators=(",", ":"))
+
     llm = LiteLLMModel(
-        model_id="gpt-oss:20b",
-        api_base="http://localhost:11434/v1",
-        api_key="ollama",
-        custom_llm_provider="openai",
+        model_id=args.model,
+        api_base="https://api.openai.com/v1",
+        api_key=os.getenv("OPENAI_API_KEY"),
     )
 
-    py = PyTool(
+    py = PythonInterpreterTool(
         authorized_imports=["pandas","json","re","math","statistics","itertools","collections","datetime"],
         description="Run short Python snippets."
     )
 
     MIN_SYSTEM = (
         "You are smolten, an editorial CSV tagger. You may read files and run pandas via the python tool. "
-        "Your job: study a small sample, use editorial judgment to define useful ROW-LEVEL tags for this dataset, "
-        "encode that judgment into a simple labeling function, then apply it to all rows. "
-        "Return ONLY a tiny JSON summary at the end."
+        "Protocol you MUST follow on EVERY step:\n"
+        "1) Start with a line beginning with 'Thoughts:' describing what you’ll do next.\n"
+        "2) Immediately follow with a single Python block wrapped EXACTLY in <code> and </code> tags.\n"
+        "3) Do not emit any code outside those tags.\n"
+        "When you produce the FINAL JSON summary, DO IT IN CODE by calling final_answer(<the JSON object>), inside <code> ... </code>."
     )
 
     agent = CodeAgent(
-        tools=[py],
+        tools=[py, FinalAnswerTool()],
         model=llm,
         add_base_tools=False,
         instructions=MIN_SYSTEM,
-        verbosity_level=0
+        verbosity_level=2,
+        additional_authorized_imports=[
+            "pandas",
+            "json",
+            "re",
+            "math",
+            "statistics",
+            "itertools",
+            "collections",
+            "datetime"
+        ],
     )
 
     TASK = f"""
 Use Python to perform ALL steps deterministically while leveraging your editorial judgment.
 
-1) Load ontology from {args.ontology_path!r} as 'ont':
-   - ont["tags"] is a dict of desired tag_name -> description. It is required to adhere to this ontology.
+You are given an ontology payload as JSON. At the VERY TOP of your first <code> block,
+you MUST create a Python dict variable named ONT EXACTLY as follows (paste verbatim):
+
+ONT = {ontology_string}
+    
+1) Use ONT (a dict with tag_name->description) as the authoritative tag list. It is required to adhere to this ontology.
 
 2) Load CSV from {args.csv_path!r} as df (pandas). Create df_all = df.copy().
    - For exploration ONLY, if len(df) > {args.sample_size}, sample {args.sample_size} rows (random_state=42) into df_s.
@@ -76,13 +104,15 @@ Use Python to perform ALL steps deterministically while leveraging your editoria
 
 6) Save df_all to {args.output_path!r} with index=False.
 
-7) Return ONLY this JSON summary (no prints/markdown):
+7) Return ONLY this JSON summary (no prints/markdown), WRAPPED IN <code> ... </code>:
+<code>
 {{
-  "rows_tagged": <int>,            # count rows where smolten_tag != ""
-  "unique_tags": <int>,            # number of distinct tags used (excluding empty strings)
-  "example_tags": [ "<tag1>", "<tag2>", "<tag3>" ],   # 3 sample tag names actually used
-  "top_tags": [ [ "<tag>", <count> ], ... ]           # up to 5 most frequent tags, desc
+  "rows_tagged": <int>,
+  "unique_tags": <int>,
+  "example_tags": [ "<tag1>", "<tag2>", "<tag3>" ],
+  "top_tags": [ [ "<tag>", <count> ], ... ]
 }}
+</code>
 
 Implementation tips:
 - Heuristic + editorial blend: You decide the keywords/regex and thresholds after reading df_s.
